@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Snake</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --board: #1e293b;
+    --snake: #4ade80;
+    --snake-head: #86efac;
+    --food: #f87171;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 1.4rem;
+    letter-spacing: 0.05em;
+  }
+  .hud {
+    display: flex;
+    gap: 24px;
+    font-size: 0.95rem;
+    color: var(--muted);
+  }
+  .hud span { color: var(--text); font-weight: 600; }
+  canvas {
+    background: var(--board);
+    border-radius: 8px;
+    box-shadow: 0 0 0 2px #334155, 0 8px 24px rgba(0,0,0,0.4);
+    image-rendering: pixelated;
+  }
+  .hint {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-align: center;
+    max-width: 420px;
+  }
+  .overlay-msg {
+    min-height: 1.4em;
+    font-size: 1rem;
+    color: #fbbf24;
+    text-align: center;
+  }
+  button {
+    background: var(--snake);
+    color: #052e16;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  button:hover { filter: brightness(1.1); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>SNAKE</h1>
+    <div class="hud">
+      <div>Score: <span id="score">0</span></div>
+      <div>Best: <span id="best">0</span></div>
+    </div>
+    <canvas id="board" width="400" height="400"></canvas>
+    <div class="overlay-msg" id="message">Press an arrow key or WASD to start</div>
+    <button id="restart">Restart</button>
+    <p class="hint">Arrow keys / WASD to move &middot; Space to pause &middot; Hitting a wall or yourself ends the game</p>
+  </div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const messageEl = document.getElementById('message');
+  const restartBtn = document.getElementById('restart');
+
+  const GRID_SIZE = 20;
+  const CELL = canvas.width / GRID_SIZE;
+  const INITIAL_STEP_MS = 130;
+  const MIN_STEP_MS = 45;
+  const SPEED_STEP_MS = 4;
+
+  let best = Number(localStorage.getItem('snake-best') || 0);
+  bestEl.textContent = best;
+
+  let snake, prevSnake, direction, nextDirection, food, score, running, paused, gameOver, lastStepTime, stepMs;
+
+  function resetGame() {
+    const mid = Math.floor(GRID_SIZE / 2);
+    snake = [
+      { x: mid - 1, y: mid },
+      { x: mid - 2, y: mid },
+      { x: mid - 3, y: mid },
+    ];
+    prevSnake = snake.map(seg => ({ ...seg }));
+    direction = { x: 1, y: 0 };
+    nextDirection = { x: 1, y: 0 };
+    score = 0;
+    stepMs = INITIAL_STEP_MS;
+    running = false;
+    paused = false;
+    gameOver = false;
+    lastStepTime = 0;
+    scoreEl.textContent = score;
+    placeFood();
+    messageEl.textContent = 'Press an arrow key or WASD to start';
+    render(1);
+  }
+
+  function placeFood() {
+    let pos;
+    do {
+      pos = {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE),
+      };
+    } while (snake.some(seg => seg.x === pos.x && seg.y === pos.y));
+    food = pos;
+  }
+
+  function setDirection(x, y) {
+    // prevent reversing directly into the snake's own body
+    if (direction.x === -x && direction.y === -y) return;
+    nextDirection = { x, y };
+    if (!running && !gameOver) {
+      running = true;
+      messageEl.textContent = '';
+    }
+  }
+
+  const KEY_MAP = {
+    ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+    w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0],
+    W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0],
+  };
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (running) togglePause();
+      return;
+    }
+    const mapped = KEY_MAP[e.key];
+    if (mapped) {
+      e.preventDefault();
+      if (gameOver) { resetGame(); return; }
+      setDirection(mapped[0], mapped[1]);
+    }
+  });
+
+  restartBtn.addEventListener('click', resetGame);
+
+  function togglePause() {
+    paused = !paused;
+    messageEl.textContent = paused ? 'Paused — press space to resume' : '';
+  }
+
+  function stepLogic() {
+    prevSnake = snake.map(seg => ({ ...seg }));
+    direction = nextDirection;
+    const head = {
+      x: snake[0].x + direction.x,
+      y: snake[0].y + direction.y,
+    };
+
+    const hitWall = head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE;
+    const hitSelf = snake.some(seg => seg.x === head.x && seg.y === head.y);
+    if (hitWall || hitSelf) {
+      endGame();
+      return;
+    }
+
+    snake.unshift(head);
+
+    if (head.x === food.x && head.y === food.y) {
+      score += 1;
+      scoreEl.textContent = score;
+      if (score > best) {
+        best = score;
+        bestEl.textContent = best;
+        localStorage.setItem('snake-best', String(best));
+      }
+      stepMs = Math.max(MIN_STEP_MS, stepMs - SPEED_STEP_MS);
+      placeFood();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function tick(timestamp) {
+    requestAnimationFrame(tick);
+
+    const active = running && !paused && !gameOver;
+    if (active) {
+      if (!lastStepTime) lastStepTime = timestamp;
+      let steps = 0;
+      while (timestamp - lastStepTime >= stepMs && steps < 5 && !gameOver) {
+        lastStepTime += stepMs;
+        stepLogic();
+        steps += 1;
+      }
+    } else {
+      lastStepTime = timestamp;
+    }
+
+    const t = active ? Math.min(1, (timestamp - lastStepTime) / stepMs) : 1;
+    render(t);
+  }
+
+  function endGame() {
+    gameOver = true;
+    running = false;
+    messageEl.textContent = `Press any move key to try again.`;
+  }
+
+  function render(t) {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--board');
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // food
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--food');
+    roundRect(food.x * CELL, food.y * CELL, CELL, CELL, 4);
+
+    // snake, sliding from its previous cell to its current cell
+    const headColor = getComputedStyle(document.documentElement).getPropertyValue('--snake-head');
+    const bodyColor = getComputedStyle(document.documentElement).getPropertyValue('--snake');
+    snake.forEach((seg, i) => {
+      const from = prevSnake[i] || seg;
+      const x = from.x + (seg.x - from.x) * t;
+      const y = from.y + (seg.y - from.y) * t;
+      ctx.fillStyle = i === 0 ? headColor : bodyColor;
+      roundRect(x * CELL, y * CELL, CELL, CELL, 4);
+    });
+
+    if (gameOver) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#f87171';
+      ctx.font = 'bold 32px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 12);
+
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillText(`Score: ${score}`, canvas.width / 2, canvas.height / 2 + 20);
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    const pad = 1;
+    x += pad; y += pad; w -= pad * 2; h -= pad * 2;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  resetGame();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
